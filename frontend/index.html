@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Support Chat</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      font-family: Inter, Segoe UI, Arial, sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+    }
+    .wrap {
+      max-width: 900px;
+      margin: 24px auto;
+      padding: 0 16px;
+    }
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    h1 { margin: 0 0 12px; font-size: 22px; }
+    .row { display: flex; gap: 8px; }
+    input, button {
+      border-radius: 8px;
+      border: 1px solid #30363d;
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+    input {
+      flex: 1;
+      background: #0d1117;
+      color: #e6edf3;
+    }
+    button {
+      background: #238636;
+      color: #fff;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 0;
+      line-height: 1.5;
+      font-size: 14px;
+    }
+    .muted { color: #8b949e; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>AI Support Chat</h1>
+      <div class="row">
+        <input id="message" placeholder="Напиши вопрос: VPN не работает..." />
+        <button id="send">Send</button>
+      </div>
+      <p class="muted">Endpoint: <code>POST /chat</code>, формат ответа: <code>text/event-stream</code></p>
+    </div>
+
+    <div class="card">
+      <div class="muted">Health:</div>
+      <pre id="health">Loading...</pre>
+    </div>
+
+    <div class="card">
+      <div class="muted">Stream output:</div>
+      <pre id="output"></pre>
+    </div>
+  </div>
+
+  <script>
+    const sendBtn = document.getElementById("send");
+    const messageInput = document.getElementById("message");
+    const output = document.getElementById("output");
+    const health = document.getElementById("health");
+
+    async function loadHealth() {
+      try {
+        const response = await fetch("/health");
+        health.textContent = JSON.stringify(await response.json(), null, 2);
+      } catch (error) {
+        health.textContent = "Health error: " + error.message;
+      }
+    }
+
+    function append(text) {
+      output.textContent += text;
+      output.scrollTop = output.scrollHeight;
+    }
+
+    async function sendChat() {
+      const message = messageInput.value.trim();
+      if (!message) return;
+
+      output.textContent = "";
+      sendBtn.disabled = true;
+
+      try {
+        const response = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message })
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error("HTTP " + response.status);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split("\n\n");
+          buffer = events.pop() || "";
+
+          for (const eventBlock of events) {
+            const dataLine = eventBlock
+              .split("\n")
+              .find((line) => line.startsWith("data: "));
+
+            if (!dataLine) continue;
+            const payload = dataLine.slice(6).trim();
+            if (payload === "[DONE]") {
+              append("\n\n[DONE]");
+              continue;
+            }
+
+            try {
+              const json = JSON.parse(payload);
+              if (json.content) {
+                append(json.content + "\n");
+              } else {
+                append(JSON.stringify(json, null, 2) + "\n");
+              }
+            } catch {
+              append(payload + "\n");
+            }
+          }
+        }
+      } catch (error) {
+        append("Error: " + error.message);
+      } finally {
+        sendBtn.disabled = false;
+      }
+    }
+
+    sendBtn.addEventListener("click", sendChat);
+    messageInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        sendChat();
+      }
+    });
+
+    loadHealth();
+  </script>
+</body>
+</html>

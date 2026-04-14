@@ -1,45 +1,35 @@
-import asyncio
-import json
-from collections.abc import AsyncGenerator
-
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
+from ..models import ChatRequest
+from ..rag import retrieve, add_documents
+import asyncio
+import json
 
-from app.models import ChatRequest
+router = APIRouter()
 
-router = APIRouter(prefix="/support", tags=["support"])
-
-
-def _sse_payload(data: dict[str, str], event: str | None = None) -> str:
-    chunks: list[str] = []
-    if event:
-        chunks.append(f"event: {event}")
-    chunks.append(f"data: {json.dumps(data, ensure_ascii=False)}")
-    return "\n".join(chunks) + "\n\n"
+# При запуске сервера сразу добавляем тестовые документы
+add_documents([
+    "Для сброса пароля перейдите по ссылке в письме, которое мы отправили на вашу корпоративную почту.",
+    "Проблемы с VPN? Убедитесь, что установлен актуальный сертификат и клиент OpenVPN. Перезапустите приложение.",
+    "Ticket создаётся автоматически в Jira. Номер SUP-XXXX. Оператор свяжется с вами в течение 15 минут."
+], metadatas=[
+    {"source": "wiki_password"},
+    {"source": "wiki_vpn"},
+    {"source": "jira"}
+])
 
 
 @router.post("/chat")
-async def chat(request: ChatRequest) -> StreamingResponse:
-    async def event_stream() -> AsyncGenerator[str, None]:
-        message = request.message.strip() or "empty message"
-        parts = [
-            f"Echo: {message}",
-            "This is a streaming response chunk.",
-            "Sources: [placeholder]",
-        ]
+async def chat(request: ChatRequest):
+    """RAG-чат техподдержки"""
+    async def event_stream():
+        # Получаем релевантные чанки из Chroma
+        chunks = retrieve(request.message, n_results=3)
+        
+        for chunk in chunks:
+            yield f"data: {json.dumps({'content': chunk})}\n\n"
+            await asyncio.sleep(0.35)  # имитация "печатания"
+        
+        yield "data: [DONE]\n\n"
 
-        yield _sse_payload({"status": "start"}, event="status")
-        for idx, part in enumerate(parts, start=1):
-            yield _sse_payload({"content": part, "index": str(idx)}, event="chunk")
-            await asyncio.sleep(0.3)
-        yield _sse_payload({"status": "done"}, event="status")
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

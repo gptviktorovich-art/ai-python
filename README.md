@@ -1,3 +1,10 @@
+## Phase 0 Week 2 — ChromaDB + RAG
+
+Реализован настоящий Retrieval-Augmented Generation:
+- Локальная векторная база Chroma
+- Embeddings через sentence-transformers
+- Streaming-ответы с релевантными чанками
+
 # ai-python-bootcamp
 
 Phase 0: Python Mastery for AI Engineer  
